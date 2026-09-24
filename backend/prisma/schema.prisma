@@ -1,0 +1,168 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ────────────────────────────────
+// ENUMS
+// ────────────────────────────────
+
+enum EstadoPedido {
+  DISENO
+  PRODUCCION
+  ENTREGA
+  ENTREGADO
+  CANCELADO
+}
+
+enum TipoMaquina {
+  PLOTTER_UV
+  LAMINADORA
+  LASER
+  SUBLIMADORA
+  ESTAMPADO
+}
+
+enum MetodoPago {
+  EFECTIVO
+  TRANSFERENCIA
+  TARJETA
+  OTRO
+}
+
+enum TipoMovimiento {
+  ENTRADA
+  SALIDA
+}
+
+// ────────────────────────────────
+// NÚCLEO: usuarios, clientes, pedidos
+// ────────────────────────────────
+
+model Usuario {
+  id           Int      @id @default(autoincrement())
+  nombre       String   @db.VarChar(100)
+  email        String   @unique @db.VarChar(150)
+  passwordHash String   @map("password_hash") @db.VarChar(255)
+  creadoEn     DateTime @default(now()) @map("creado_en")
+
+  pedidos Pedido[]
+  gastos  Gasto[]
+
+  @@map("usuarios")
+}
+
+model Cliente {
+  id               Int      @id @default(autoincrement())
+  nombre           String   @db.VarChar(150)
+  telefonoWhatsapp String   @map("telefono_whatsapp") @db.VarChar(20)
+  creadoEn         DateTime @default(now()) @map("creado_en")
+
+  pedidos Pedido[]
+
+  @@map("clientes")
+}
+
+model Pedido {
+  id             Int          @id @default(autoincrement())
+  clienteId      Int          @map("cliente_id")
+  usuarioId      Int          @map("usuario_id")
+  estado         EstadoPedido @default(DISENO)
+  fechaCreacion  DateTime     @default(now()) @map("fecha_creacion")
+  fechaEntrega   DateTime?    @map("fecha_entrega") @db.Date
+  fechaEntregado DateTime?    @map("fecha_entregado") // se llena al pasar a ENTREGADO; usada para filtrar historial
+
+  cliente Cliente @relation(fields: [clienteId], references: [id])
+  usuario Usuario @relation(fields: [usuarioId], references: [id])
+
+  items DetallePedido[]
+  pagos Pago[]
+
+  @@index([estado])
+  @@index([fechaEntregado])
+  @@map("pedidos")
+}
+
+model DetallePedido {
+  id             Int         @id @default(autoincrement())
+  pedidoId       Int         @map("pedido_id")
+  descripcion    String      @db.VarChar(255)
+  tipoMaquina    TipoMaquina @map("tipo_maquina")
+  cantidad       Decimal     @db.Decimal(10, 2)
+  precioUnitario Decimal     @map("precio_unitario") @db.Decimal(10, 2)
+
+  pedido Pedido @relation(fields: [pedidoId], references: [id], onDelete: Cascade)
+
+  @@index([pedidoId])
+  @@map("detalle_pedido")
+}
+
+// ────────────────────────────────
+// DINERO: ledger, nunca campos editables a mano
+// ────────────────────────────────
+
+model Pago {
+  id       Int        @id @default(autoincrement())
+  pedidoId Int        @map("pedido_id")
+  monto    Decimal    @db.Decimal(10, 2)
+  metodo   MetodoPago
+  fecha    DateTime   @default(now())
+
+  pedido Pedido @relation(fields: [pedidoId], references: [id], onDelete: Cascade)
+
+  @@index([pedidoId])
+  @@map("pagos")
+}
+
+model Gasto {
+  id          Int      @id @default(autoincrement())
+  usuarioId   Int      @map("usuario_id")
+  categoria   String   @db.VarChar(50)
+  descripcion String?  @db.VarChar(255)
+  monto       Decimal  @db.Decimal(10, 2)
+  fecha       DateTime @default(now())
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id])
+
+  @@index([fecha])
+  @@map("gastos")
+}
+
+// ────────────────────────────────
+// INVENTARIO: stock cacheado + historial (ledger) como fuente de verdad
+// ────────────────────────────────
+
+model Material {
+  id          Int     @id @default(autoincrement())
+  nombre      String  @db.VarChar(100)
+  unidad      String  @db.VarChar(20) // metros, unidades, hojas...
+  stockActual Decimal @default(0) @map("stock_actual") @db.Decimal(10, 2)
+  stockMinimo Decimal @default(0) @map("stock_minimo") @db.Decimal(10, 2)
+
+  movimientos MovimientoInventario[]
+
+  @@map("materiales")
+}
+
+model MovimientoInventario {
+  id         Int            @id @default(autoincrement())
+  materialId Int            @map("material_id")
+  tipo       TipoMovimiento
+  cantidad   Decimal        @db.Decimal(10, 2)
+  motivo     String?        @db.VarChar(255)
+  fecha      DateTime       @default(now())
+
+  material Material @relation(fields: [materialId], references: [id])
+
+  @@index([materialId])
+  @@map("movimientos_inventario")
+}
