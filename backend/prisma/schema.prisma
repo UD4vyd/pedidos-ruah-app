@@ -55,8 +55,11 @@ model Usuario {
   passwordHash String   @map("password_hash") @db.VarChar(255)
   creadoEn     DateTime @default(now()) @map("creado_en")
 
-  pedidos Pedido[]
-  gastos  Gasto[]
+  pedidos        Pedido[]
+  gastos         Gasto[]  @relation("GastoCreadoPor")
+  gastosBorrados Gasto[]  @relation("GastoBorradoPor")
+  pagosBorrados  Pago[]   @relation("PagoBorradoPor")
+  sesiones       Sesion[]
 
   @@map("usuarios")
 }
@@ -117,8 +120,14 @@ model Pago {
   metodo   MetodoPago
   fecha    DateTime   @default(now())
 
-  pedido Pedido @relation(fields: [pedidoId], references: [id], onDelete: Cascade)
+  borradoEn     DateTime? @map("borrado_en")
+  borradoPorId  Int?      @map("borrado_por_id")
+  motivoBorrado String?   @map("motivo_borrado") @db.VarChar(255)
+  
 
+  pedido     Pedido   @relation(fields: [pedidoId], references: [id], onDelete: Cascade)
+  
+  borradoPor Usuario? @relation("PagoBorradoPor", fields: [borradoPorId], references: [id], onDelete: Restrict)
   @@index([pedidoId])
   @@map("pagos")
 }
@@ -131,8 +140,12 @@ model Gasto {
   monto       Decimal  @db.Decimal(10, 2)
   fecha       DateTime @default(now())
 
-  usuario Usuario @relation(fields: [usuarioId], references: [id])
+  borradoEn     DateTime? @map("borrado_en")
+  borradoPorId  Int?      @map("borrado_por_id")
+  motivoBorrado String?   @map("motivo_borrado") @db.VarChar(255)
 
+  usuario    Usuario  @relation("GastoCreadoPor", fields: [usuarioId], references: [id])
+  borradoPor Usuario? @relation("GastoBorradoPor", fields: [borradoPorId], references: [id], onDelete: Restrict)
   @@index([fecha])
   @@map("gastos")
 }
@@ -166,3 +179,22 @@ model MovimientoInventario {
   @@index([materialId])
   @@map("movimientos_inventario")
 }
+
+// ────────────────────────────────
+// SESIONES: stateful, el servidor puede cerrarlas
+// ────────────────────────────────
+
+model Sesion {
+  id          String   @id @db.VarChar(64) // hash SHA-256 del token, nunca el token
+  usuarioId   Int      @map("usuario_id")
+  creadaEn    DateTime @default(now()) @map("creada_en")
+  expiraEn    DateTime @map("expira_en")
+  dispositivo String?  @db.VarChar(255)
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@index([usuarioId])
+  @@index([expiraEn])
+  @@map("sesiones")
+}
+
