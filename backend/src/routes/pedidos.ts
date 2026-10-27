@@ -2,18 +2,10 @@ import { Router } from "express";
 import { z } from "zod";
 import { enviarError } from "../lib/http.js";
 import { prisma } from "../lib/prisma.js";
-import { idSchema, monto } from "../lib/validacion.js";
+import { fecha, idSchema, monto } from "../lib/validacion.js";
 import { formatearPedido, incluirPedido, obtenerPedido } from "../services/pedidos.js";
 
 export const pedidosRouter = Router();
-
-const fecha = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Usa el formato AAAA-MM-DD")
-  .refine((valor) => {
-    const date = new Date(`${valor}T00:00:00.000Z`);
-    return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === valor;
-  }, "La fecha no existe");
 
 const itemSchema = z.object({
   descripcion: z.string().trim().min(1, "Cada ítem necesita descripción").max(255),

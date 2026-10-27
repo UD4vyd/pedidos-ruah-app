@@ -12,3 +12,12 @@ export const monto = z
   .trim()
   .regex(/^\d+(\.\d{1,2})?$/, "Usa números con máximo 2 decimales y sin separador de miles")
   .regex(/^\d{1,8}(\.\d+)?$/, "El monto máximo es 99999999.99");
+
+// Fecha sin hora (AAAA-MM-DD) que además debe existir en el calendario (rechaza 2026-02-30).
+export const fecha = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "Usa el formato AAAA-MM-DD")
+  .refine((valor) => {
+    const date = new Date(`${valor}T00:00:00.000Z`);
+    return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === valor;
+  }, "La fecha no existe");
