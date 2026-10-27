@@ -130,9 +130,11 @@ Lista clientes. `buscar` es opcional y filtra por nombre o teléfono. Se usa en 
 { "nombre": "Panadería El Trigal", "telefonoWhatsapp": "3001234567" }
 ```
 **201** — cliente creado
+**409** `CLIENTE_DUPLICADO` — ya existe un cliente con ese teléfono.
 
 ### `PATCH /api/clientes/:id`
 Actualiza nombre o teléfono. Solo se envían los campos que cambian. **200**
+**404** si el cliente no existe. **409** `CLIENTE_DUPLICADO` si el teléfono nuevo ya lo tiene **otro** cliente (reenviar el teléfono propio no es un error).
 
 ### `DELETE /api/clientes/:id`
 **204** si no tiene pedidos. **409** si tiene pedidos asociados: no se borra, para no perder historial financiero.

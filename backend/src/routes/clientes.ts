@@ -70,6 +70,16 @@ clientesRouter.patch("/:id", async (req, res) => {
     return;
   }
 
+  if (datos.data.telefonoWhatsapp) {
+    const duplicado = await prisma.cliente.findFirst({
+      where: { telefonoWhatsapp: datos.data.telefonoWhatsapp, NOT: { id: id.data } },
+    });
+    if (duplicado) {
+      enviarError(res, 409, "CLIENTE_DUPLICADO", "Ya existe un cliente con ese teléfono");
+      return;
+    }
+  }
+
   const cliente = await prisma.cliente.update({
     where: { id: id.data },
     data: datos.data,
