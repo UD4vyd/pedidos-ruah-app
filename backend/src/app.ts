@@ -1,5 +1,6 @@
 import express, { type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
+import { enviarError } from "./lib/http.js";
 import { prisma } from "./lib/prisma.js";
 import cookieParser from "cookie-parser";
 import { authRouter } from "./routes/auth.js";
@@ -28,9 +29,9 @@ app.get("/health", async (_req, res) => {
 
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   if (typeof error === "object" && error !== null && "type" in error && error.type === "entity.parse.failed") {
-    res.status(400).json({ error: { code: "JSON_INVALIDO", message: "El cuerpo de la petición no es JSON válido" } });
+    enviarError(res, 400, "JSON_INVALIDO", "El cuerpo de la petición no es JSON válido");
     return;
   }
   console.error(error);
-  res.status(500).json({ error: { code: "ERROR_INTERNO", message: "Ocurrió un error inesperado" } });
+  enviarError(res, 500, "ERROR_INTERNO", "Ocurrió un error inesperado");
 });

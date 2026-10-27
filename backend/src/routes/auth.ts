@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
+import { enviarError } from "../lib/http.js";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { verifyPassword } from "../services/password.js";
@@ -16,9 +17,7 @@ const loginSchema = z.object({
 authRouter.post("/login", async (req, res) => {
   const datos = loginSchema.safeParse(req.body);
   if (!datos.success) {
-    res.status(400).json({
-      error: { code: "VALIDATION_ERROR", message: "Correo y contraseña son obligatorios" },
-    });
+    enviarError(res, 400, "VALIDATION_ERROR", "Correo y contraseña son obligatorios");
     return;
   }
 
@@ -29,9 +28,7 @@ authRouter.post("/login", async (req, res) => {
     : false;
 
   if (!usuario || !passwordValida) {
-    res.status(401).json({
-      error: { code: "CREDENCIALES_INVALIDAS", message: "Correo o contraseña incorrectos" },
-    });
+    enviarError(res, 401, "CREDENCIALES_INVALIDAS", "Correo o contraseña incorrectos");
     return;
   }
 
