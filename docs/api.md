@@ -22,7 +22,7 @@ Si el código y este documento no coinciden, uno de los dos está mal: se corrig
 | 204 | OK, sin contenido (por ejemplo, después de borrar) |
 | 400 | Datos inválidos (falta un campo, tipo incorrecto) |
 | 401 | No hay sesión iniciada o expiró |
-| 404 | El recurso no existe |
+| 404 | El recurso o la ruta no existe |
 | 409 | Conflicto con el estado actual (ej. borrar un cliente con pedidos) |
 | 500 | Error interno del servidor |
 
@@ -36,6 +36,12 @@ Si el código y este documento no coinciden, uno de los dos está mal: se corrig
   }
 }
 ```
+
+### Rutas que no existen
+
+Una ruta desconocida responde **404** con `code: "RUTA_NO_ENCONTRADA"`, en el mismo formato de error.
+Es distinto de `NO_ENCONTRADO`, que significa que la ruta existe pero el recurso pedido (un cliente, un pedido) no.
+Dentro de un recurso protegido (por ejemplo `/api/clientes/x/y`), sin sesión responde primero **401**.
 
 ---
 

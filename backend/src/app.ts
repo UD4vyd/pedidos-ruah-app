@@ -27,6 +27,10 @@ app.get("/health", async (_req, res) => {
   }
 });
 
+app.use((_req, res) => {
+  enviarError(res, 404, "RUTA_NO_ENCONTRADA", "La ruta no existe");
+});
+
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   if (typeof error === "object" && error !== null && "type" in error && error.type === "entity.parse.failed") {
     enviarError(res, 400, "JSON_INVALIDO", "El cuerpo de la petición no es JSON válido");
