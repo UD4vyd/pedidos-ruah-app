@@ -4,7 +4,13 @@ import { EstadoPedido } from "../generated/prisma/enums.js";
 import { enviarError } from "../lib/http.js";
 import { prisma } from "../lib/prisma.js";
 import { fecha, idSchema, monto } from "../lib/validacion.js";
-import { formatearPedido, incluirPedido, obtenerPedido } from "../services/pedidos.js";
+import {
+  formatearPedido,
+  incluirPedido,
+  obtenerPedido,
+  sumarItems,
+  sumarPagos,
+} from "../services/pedidos.js";
 
 export const pedidosRouter = Router();
 
@@ -23,6 +29,16 @@ const crearPedidoSchema = z.object({
   clienteId: idSchema,
   fechaEntrega: fecha.optional(),
   items: z.array(itemSchema).min(1, "El pedido debe tener al menos un ítem"),
+});
+
+const editarPedidoSchema = z.object({
+  // null quita la fecha de entrega; si no llega, no cambia.
+  fechaEntrega: fecha.nullable().optional(),
+  // Si llegan, reemplazan la lista completa; si no llegan, no cambian.
+  items: z.array(itemSchema).min(1, "El pedido debe tener al menos un ítem").optional(),
+  // El estado tiene su propio endpoint. Se rechaza en vez de ignorarlo para que
+  // el frontend no crea que movió el pedido.
+  estado: z.never("Para cambiar el estado usa PATCH /api/pedidos/:id/estado").optional(),
 });
 
 pedidosRouter.post("/", async (req, res) => {
@@ -83,6 +99,71 @@ pedidosRouter.get("/:id", async (req, res) => {
   }
 
   res.json(pedido);
+});
+
+pedidosRouter.patch("/:id", async (req, res) => {
+  const id = idSchema.safeParse(req.params.id);
+  if (!id.success) {
+    enviarError(res, 400, "VALIDATION_ERROR", "Id inválido");
+    return;
+  }
+  const datos = editarPedidoSchema.safeParse(req.body ?? {});
+  if (!datos.success) {
+    enviarError(res, 400, "VALIDATION_ERROR", datos.error.issues[0]?.message ?? "Datos inválidos");
+    return;
+  }
+
+  const pedido = await prisma.pedido.findUnique({ where: { id: id.data }, include: incluirPedido });
+  if (!pedido) {
+    enviarError(res, 404, "NO_ENCONTRADO", "El pedido no existe");
+    return;
+  }
+  if (pedido.estado === "ENTREGADO" || pedido.estado === "CANCELADO") {
+    enviarError(
+      res,
+      409,
+      "PEDIDO_CERRADO",
+      "No se puede editar un pedido entregado o cancelado. Muévelo primero a otra columna.",
+    );
+    return;
+  }
+
+  const { fechaEntrega, items } = datos.data;
+
+  if (items) {
+    // Un total menor que lo pagado dejaría saldo negativo y descuadraría porCobrar.
+    const total = sumarItems(items);
+    const pagado = sumarPagos(pedido.pagos);
+    if (total.lessThan(pagado)) {
+      enviarError(
+        res,
+        409,
+        "TOTAL_MENOR_QUE_PAGADO",
+        `El total quedaría en ${total.toFixed(2)}, menos de lo ya pagado (${pagado.toFixed(2)}). Corrige primero el pago.`,
+      );
+      return;
+    }
+  }
+
+  if (fechaEntrega !== undefined || items) {
+    // Escritura anidada: Prisma la ejecuta en una transacción, así que borrar los
+    // ítems anteriores y crear los nuevos ocurre completo o no ocurre.
+    await prisma.pedido.update({
+      where: { id: id.data },
+      data: {
+        fechaEntrega:
+          fechaEntrega === undefined
+            ? undefined
+            : fechaEntrega === null
+              ? null
+              : new Date(`${fechaEntrega}T00:00:00.000Z`),
+        items: items ? { deleteMany: {}, create: items } : undefined,
+      },
+    });
+    // Socket.io (pendiente): emitir aquí "pedido:actualizado" con el pedido completo.
+  }
+
+  res.json(await obtenerPedido(id.data));
 });
 
 pedidosRouter.patch("/:id/estado", async (req, res) => {

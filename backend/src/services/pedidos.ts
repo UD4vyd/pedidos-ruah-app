@@ -21,9 +21,13 @@ export function sumarItems(items: { cantidad: ValorDecimal; precioUnitario: Valo
   );
 }
 
+export function sumarPagos(pagos: { monto: Prisma.Decimal }[]) {
+  return pagos.reduce((suma, pago) => suma.add(pago.monto), new Prisma.Decimal(0));
+}
+
 export function formatearPedido(pedido: PedidoConRelaciones) {
   const total = sumarItems(pedido.items);
-  const pagado = pedido.pagos.reduce((suma, pago) => suma.add(pago.monto), new Prisma.Decimal(0));
+  const pagado = sumarPagos(pedido.pagos);
 
   return {
     id: pedido.id,

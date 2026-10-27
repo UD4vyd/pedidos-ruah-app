@@ -204,8 +204,26 @@ Debe tener al menos un ítem. **201** con el pedido creado (forma de `GET /api/p
 Emite el evento de socket `pedido:creado`.
 
 ### `PATCH /api/pedidos/:id`
-Edita datos del pedido (fecha de entrega, ítems). **No cambia el estado**: para eso existe el endpoint siguiente. **200**
-Emite `pedido:actualizado`.
+Edita la fecha de entrega y/o los ítems. **No cambia el estado**: para eso existe el endpoint siguiente.
+
+**Body** (todos los campos son opcionales; solo se envía lo que cambia)
+```json
+{
+  "fechaEntrega": "2026-10-08",
+  "items": [
+    { "descripcion": "Pendón 1x2m", "tipoMaquina": "PLOTTER_UV", "cantidad": "2", "precioUnitario": "85000" }
+  ]
+}
+```
+- `fechaEntrega`: una fecha `AAAA-MM-DD`, o `null` para quitarla. Si no se envía, no cambia.
+- `items`: si se envía, **reemplaza la lista completa** (mínimo un ítem), en una transacción: o se guardan todos los nuevos o quedan los anteriores. Los ítems reciben ids nuevos, así que el frontend no debe guardar ids de ítems entre ediciones. Si no se envía, los ítems no cambian.
+- Un body vacío `{}` responde **200** sin cambios.
+
+**200** con el pedido actualizado (forma de `GET /api/pedidos/:id`). Emite `pedido:actualizado` si hubo cambios.
+**400** si los datos no son válidos, incluido enviar `estado` (se cambia con `PATCH /api/pedidos/:id/estado`).
+**404** si el pedido no existe.
+**409** `PEDIDO_CERRADO` si el pedido está `ENTREGADO` o `CANCELADO`. Para corregirlo, primero se mueve a otra columna.
+**409** `TOTAL_MENOR_QUE_PAGADO` si con los ítems nuevos el total quedaría por debajo de lo ya pagado (solo cuentan los pagos vigentes). El saldo nunca queda negativo: si se cobró de más, primero se corrige el pago. Un total igual a lo pagado sí se permite (saldo `0.00`).
 
 ### `PATCH /api/pedidos/:id/estado`
 Mueve el pedido de columna. Es lo que llama el drag & drop del Kanban.

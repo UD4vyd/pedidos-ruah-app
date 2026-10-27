@@ -254,6 +254,226 @@ describe("GET /api/pedidos/:id", () => {
   });
 });
 
+describe("PATCH /api/pedidos/:id", () => {
+  const NUEVOS_ITEMS = [
+    { descripcion: "Vinilo cortado", tipoMaquina: "LASER", cantidad: "3", precioUnitario: "15000" },
+    { descripcion: "Laminado", tipoMaquina: "LAMINADORA", cantidad: "1", precioUnitario: "5000.50" },
+  ];
+
+  function pedidoActivo(cambios: Partial<Parameters<typeof crearPedido>[0]> = {}) {
+    return crearPedido({
+      clienteId: cliente.id,
+      usuarioId: usuario.id,
+      fechaEntrega: "2026-10-05",
+      items: [{ descripcion: "Pendón 1x2m", cantidad: "1", precioUnitario: "85000" }],
+      ...cambios,
+    });
+  }
+
+  async function idsDeItems(pedidoId: number) {
+    const items = await prisma.detallePedido.findMany({ where: { pedidoId }, orderBy: { id: "asc" } });
+    return items.map((item) => item.id);
+  }
+
+  it("cambia solo fechaEntrega y deja los ítems intactos", async () => {
+    const pedido = await pedidoActivo();
+    const idsAntes = await idsDeItems(pedido.id);
+
+    const res = await agent.patch(`/api/pedidos/${pedido.id}`).send({ fechaEntrega: "2026-11-15" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.fechaEntrega).toBe("2026-11-15");
+    expect(await idsDeItems(pedido.id)).toEqual(idsAntes);
+  });
+
+  it("quita fechaEntrega con null", async () => {
+    const pedido = await pedidoActivo();
+
+    const res = await agent.patch(`/api/pedidos/${pedido.id}`).send({ fechaEntrega: null });
+
+    expect(res.status).toBe(200);
+    expect(res.body.fechaEntrega).toBeNull();
+  });
+
+  it("reemplaza la lista completa de ítems y recalcula el total", async () => {
+    const pedido = await pedidoActivo();
+    const idsAntes = await idsDeItems(pedido.id);
+
+    const res = await agent.patch(`/api/pedidos/${pedido.id}`).send({ items: NUEVOS_ITEMS });
+
+    expect(res.status).toBe(200);
+    expect(res.body.items).toEqual([
+      { id: expect.any(Number), descripcion: "Vinilo cortado", tipoMaquina: "LASER", cantidad: "3.00", precioUnitario: "15000.00" },
+      { id: expect.any(Number), descripcion: "Laminado", tipoMaquina: "LAMINADORA", cantidad: "1.00", precioUnitario: "5000.50" },
+    ]);
+    expect(res.body.total).toBe("50000.50");
+    expect(res.body.fechaEntrega).toBe("2026-10-05");
+    const idsDespues = await idsDeItems(pedido.id);
+    expect(idsDespues).toHaveLength(2);
+    expect(idsDespues.some((itemId) => idsAntes.includes(itemId))).toBe(false);
+  });
+
+  it("cambia fechaEntrega e ítems a la vez", async () => {
+    const pedido = await pedidoActivo();
+
+    const res = await agent
+      .patch(`/api/pedidos/${pedido.id}`)
+      .send({ fechaEntrega: "2026-12-01", items: NUEVOS_ITEMS });
+
+    expect(res.status).toBe(200);
+    expect(res.body.fechaEntrega).toBe("2026-12-01");
+    expect(res.body.items).toHaveLength(2);
+  });
+
+  it("con cuerpo vacío responde 200 sin cambios", async () => {
+    const pedido = await pedidoActivo();
+    const antes = await agent.get(`/api/pedidos/${pedido.id}`);
+
+    const res = await agent.patch(`/api/pedidos/${pedido.id}`).send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(antes.body);
+  });
+
+  it("rechaza estado en el body y no cambia el estado", async () => {
+    const pedido = await pedidoActivo();
+
+    const res = await agent
+      .patch(`/api/pedidos/${pedido.id}`)
+      .send({ estado: "ENTREGADO", fechaEntrega: "2026-11-15" });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({
+      error: { code: "VALIDATION_ERROR", message: "Para cambiar el estado usa PATCH /api/pedidos/:id/estado" },
+    });
+    const guardado = await prisma.pedido.findUniqueOrThrow({ where: { id: pedido.id } });
+    expect(guardado.estado).toBe("DISENO");
+    expect(guardado.fechaEntrega?.toISOString().slice(0, 10)).toBe("2026-10-05");
+  });
+
+  it.each([
+    ["items vacío", { items: [] }, "El pedido debe tener al menos un ítem"],
+    ["un ítem sin descripción", { items: [{ ...NUEVOS_ITEMS[0], descripcion: " " }] }, "Cada ítem necesita descripción"],
+    ["un ítem con cantidad 0", { items: [{ ...NUEVOS_ITEMS[0], cantidad: "0" }] }, "La cantidad debe ser mayor que 0"],
+    ["un precio mayor que el máximo", { items: [{ ...NUEVOS_ITEMS[0], precioUnitario: "100000000" }] }, "El monto máximo es 99999999.99"],
+    ["una fecha que no existe", { fechaEntrega: "2026-02-30" }, "La fecha no existe"],
+    ["una fecha en otro formato", { fechaEntrega: "05/10/2026" }, "Usa el formato AAAA-MM-DD"],
+  ])("responde 400 con %s", async (_caso, body, mensaje) => {
+    const pedido = await pedidoActivo();
+    const idsAntes = await idsDeItems(pedido.id);
+
+    const res = await agent.patch(`/api/pedidos/${pedido.id}`).send(body);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: { code: "VALIDATION_ERROR", message: mensaje } });
+    expect(await idsDeItems(pedido.id)).toEqual(idsAntes);
+  });
+
+  it.each(["abc", "0", "2147483648"])("responde 400 con id %s", async (id) => {
+    const res = await agent.patch(`/api/pedidos/${id}`).send({ fechaEntrega: "2026-11-15" });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: { code: "VALIDATION_ERROR", message: "Id inválido" } });
+  });
+
+  it.each(["999", "2147483647"])("responde 404 si el pedido %s no existe", async (id) => {
+    const res = await agent.patch(`/api/pedidos/${id}`).send({ fechaEntrega: "2026-11-15" });
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: { code: "NO_ENCONTRADO", message: "El pedido no existe" } });
+  });
+
+  it.each(["ENTREGADO", "CANCELADO"] as const)(
+    "responde 409 PEDIDO_CERRADO si el pedido está %s y no cambia nada",
+    async (estado) => {
+      const pedido = await pedidoActivo({ estado });
+      const idsAntes = await idsDeItems(pedido.id);
+
+      const res = await agent
+        .patch(`/api/pedidos/${pedido.id}`)
+        .send({ fechaEntrega: "2026-11-15", items: NUEVOS_ITEMS });
+
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe("PEDIDO_CERRADO");
+      expect(await idsDeItems(pedido.id)).toEqual(idsAntes);
+      const guardado = await prisma.pedido.findUniqueOrThrow({ where: { id: pedido.id } });
+      expect(guardado.fechaEntrega?.toISOString().slice(0, 10)).toBe("2026-10-05");
+    },
+  );
+
+  describe("total frente a lo ya pagado", () => {
+    it("responde 409 TOTAL_MENOR_QUE_PAGADO si el total quedaría por debajo de lo pagado", async () => {
+      const pedido = await pedidoActivo();
+      await prisma.pago.create({ data: { pedidoId: pedido.id, monto: "60000", metodo: "EFECTIVO" } });
+      const idsAntes = await idsDeItems(pedido.id);
+
+      const res = await agent.patch(`/api/pedidos/${pedido.id}`).send({ items: NUEVOS_ITEMS });
+
+      expect(res.status).toBe(409);
+      expect(res.body).toEqual({
+        error: {
+          code: "TOTAL_MENOR_QUE_PAGADO",
+          message: "El total quedaría en 50000.50, menos de lo ya pagado (60000.00). Corrige primero el pago.",
+        },
+      });
+      expect(await idsDeItems(pedido.id)).toEqual(idsAntes);
+    });
+
+    it("permite un total igual a lo pagado, con saldo 0.00", async () => {
+      const pedido = await pedidoActivo();
+      await prisma.pago.create({ data: { pedidoId: pedido.id, monto: "50000.50", metodo: "EFECTIVO" } });
+
+      const res = await agent.patch(`/api/pedidos/${pedido.id}`).send({ items: NUEVOS_ITEMS });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ total: "50000.50", pagado: "50000.50", saldo: "0.00" });
+    });
+
+    it("no cuenta los pagos borrados", async () => {
+      const pedido = await pedidoActivo();
+      await prisma.pago.createMany({
+        data: [
+          { pedidoId: pedido.id, monto: "40000", metodo: "EFECTIVO" },
+          {
+            pedidoId: pedido.id,
+            monto: "40000",
+            metodo: "EFECTIVO",
+            borradoEn: new Date(),
+            borradoPorId: usuario.id,
+            motivoBorrado: "Se registró dos veces",
+          },
+        ],
+      });
+
+      // 50000.50 es menos que 80000 (contando el borrado) pero más que 40000 (vigente).
+      const res = await agent.patch(`/api/pedidos/${pedido.id}`).send({ items: NUEVOS_ITEMS });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ total: "50000.50", pagado: "40000.00", saldo: "10000.50" });
+    });
+  });
+
+  it("es atómico: si falla un ítem nuevo, quedan los ítems y la fecha anteriores", async () => {
+    const pedido = await pedidoActivo();
+    const idsAntes = await idsDeItems(pedido.id);
+    const consola = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await conTriggerQueFalla(() =>
+      agent.patch(`/api/pedidos/${pedido.id}`).send({
+        fechaEntrega: "2026-12-24",
+        items: [NUEVOS_ITEMS[0], { ...NUEVOS_ITEMS[1], descripcion: DESCRIPCION_QUE_FALLA }],
+      }),
+    );
+
+    expect(res.status).toBe(500);
+    expect(consola).toHaveBeenCalled();
+    consola.mockRestore();
+    expect(await idsDeItems(pedido.id)).toEqual(idsAntes);
+    const guardado = await prisma.pedido.findUniqueOrThrow({ where: { id: pedido.id } });
+    expect(guardado.fechaEntrega?.toISOString().slice(0, 10)).toBe("2026-10-05");
+  });
+});
+
 describe("PATCH /api/pedidos/:id/estado", () => {
   const ESTADOS = ["DISENO", "PRODUCCION", "ENTREGA", "ENTREGADO", "CANCELADO"] as const;
   const PARES = ESTADOS.flatMap((origen) =>
@@ -382,6 +602,5 @@ describe("PATCH /api/pedidos/:id/estado", () => {
 
 describe("pendiente de implementar", () => {
   it.todo("GET /api/pedidos/historial filtra ENTREGADO por fechaEntregado (por defecto, últimos 7 días)");
-  it.todo("PATCH /api/pedidos/:id edita fecha de entrega e ítems sin cambiar el estado");
   it.todo("los cambios de pedidos emiten pedido:creado, pedido:actualizado y pedido:estado por socket");
 });
