@@ -1,19 +1,19 @@
 import { Router } from "express";
 import { z } from "zod";
+import { EstadoPedido } from "../generated/prisma/enums.js";
+import { diasIncluidos, hoyEnColombia, inicioDelDiaEnColombia, sumarDias } from "../lib/fechas.js";
 import { enviarError } from "../lib/http.js";
 import { prisma } from "../lib/prisma.js";
-import { idSchema, monto } from "../lib/validacion.js";
-import { formatearPedido, incluirPedido, obtenerPedido } from "../services/pedidos.js";
+import { fecha, idSchema, monto } from "../lib/validacion.js";
+import {
+  formatearPedido,
+  incluirPedido,
+  obtenerPedido,
+  sumarItems,
+  sumarPagos,
+} from "../services/pedidos.js";
 
 export const pedidosRouter = Router();
-
-const fecha = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Usa el formato AAAA-MM-DD")
-  .refine((valor) => {
-    const date = new Date(`${valor}T00:00:00.000Z`);
-    return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === valor;
-  }, "La fecha no existe");
 
 const itemSchema = z.object({
   descripcion: z.string().trim().min(1, "Cada ítem necesita descripción").max(255),
@@ -22,10 +22,34 @@ const itemSchema = z.object({
   precioUnitario: monto,
 });
 
+const DIAS_HISTORIAL_POR_DEFECTO = 7;
+// Sin paginación, un rango de varios años devolvería miles de pedidos con sus relaciones.
+const MAX_DIAS_HISTORIAL = 366;
+
+const historialSchema = z.object({
+  desde: fecha.optional(),
+  hasta: fecha.optional(),
+  buscar: z.string().trim().max(150, "La búsqueda es demasiado larga").optional(),
+});
+
+const cambiarEstadoSchema = z.object({
+  estado: z.enum(EstadoPedido, "El estado no es válido"),
+});
+
 const crearPedidoSchema = z.object({
   clienteId: idSchema,
   fechaEntrega: fecha.optional(),
   items: z.array(itemSchema).min(1, "El pedido debe tener al menos un ítem"),
+});
+
+const editarPedidoSchema = z.object({
+  // null quita la fecha de entrega; si no llega, no cambia.
+  fechaEntrega: fecha.nullable().optional(),
+  // Si llegan, reemplazan la lista completa; si no llegan, no cambian.
+  items: z.array(itemSchema).min(1, "El pedido debe tener al menos un ítem").optional(),
+  // El estado tiene su propio endpoint. Se rechaza en vez de ignorarlo para que
+  // el frontend no crea que movió el pedido.
+  estado: z.never("Para cambiar el estado usa PATCH /api/pedidos/:id/estado").optional(),
 });
 
 pedidosRouter.post("/", async (req, res) => {
@@ -72,6 +96,45 @@ pedidosRouter.get("/", async (_req, res) => {
   res.json(pedidos.map(formatearPedido));
 });
 
+// Debe declararse antes de "/:id": si no, "historial" se tomaría como un id.
+pedidosRouter.get("/historial", async (req, res) => {
+  const datos = historialSchema.safeParse(req.query);
+  if (!datos.success) {
+    enviarError(res, 400, "VALIDATION_ERROR", datos.error.issues[0]?.message ?? "Datos inválidos");
+    return;
+  }
+
+  const hasta = datos.data.hasta ?? hoyEnColombia();
+  const desde = datos.data.desde ?? sumarDias(hasta, -(DIAS_HISTORIAL_POR_DEFECTO - 1));
+  // Las fechas AAAA-MM-DD se pueden comparar como texto.
+  if (desde > hasta) {
+    enviarError(res, 400, "VALIDATION_ERROR", "desde no puede ser posterior a hasta");
+    return;
+  }
+  if (diasIncluidos(desde, hasta) > MAX_DIAS_HISTORIAL) {
+    enviarError(res, 400, "VALIDATION_ERROR", `El rango máximo es de ${MAX_DIAS_HISTORIAL} días`);
+    return;
+  }
+
+  const buscar = datos.data.buscar;
+  const pedidos = await prisma.pedido.findMany({
+    where: {
+      estado: "ENTREGADO",
+      // Intervalo semiabierto en días de Colombia: desde el inicio de `desde`
+      // hasta antes del inicio del día siguiente a `hasta`.
+      fechaEntregado: {
+        gte: inicioDelDiaEnColombia(desde),
+        lt: inicioDelDiaEnColombia(sumarDias(hasta, 1)),
+      },
+      cliente: buscar ? { nombre: { contains: buscar, mode: "insensitive" } } : undefined,
+    },
+    include: incluirPedido,
+    orderBy: [{ fechaEntregado: "desc" }, { id: "desc" }],
+  });
+
+  res.json(pedidos.map(formatearPedido));
+});
+
 pedidosRouter.get("/:id", async (req, res) => {
   const id = idSchema.safeParse(req.params.id);
   if (!id.success) {
@@ -86,4 +149,103 @@ pedidosRouter.get("/:id", async (req, res) => {
   }
 
   res.json(pedido);
+});
+
+pedidosRouter.patch("/:id", async (req, res) => {
+  const id = idSchema.safeParse(req.params.id);
+  if (!id.success) {
+    enviarError(res, 400, "VALIDATION_ERROR", "Id inválido");
+    return;
+  }
+  const datos = editarPedidoSchema.safeParse(req.body ?? {});
+  if (!datos.success) {
+    enviarError(res, 400, "VALIDATION_ERROR", datos.error.issues[0]?.message ?? "Datos inválidos");
+    return;
+  }
+
+  const pedido = await prisma.pedido.findUnique({ where: { id: id.data }, include: incluirPedido });
+  if (!pedido) {
+    enviarError(res, 404, "NO_ENCONTRADO", "El pedido no existe");
+    return;
+  }
+  if (pedido.estado === "ENTREGADO" || pedido.estado === "CANCELADO") {
+    enviarError(
+      res,
+      409,
+      "PEDIDO_CERRADO",
+      "No se puede editar un pedido entregado o cancelado. Muévelo primero a otra columna.",
+    );
+    return;
+  }
+
+  const { fechaEntrega, items } = datos.data;
+
+  if (items) {
+    // Un total menor que lo pagado dejaría saldo negativo y descuadraría porCobrar.
+    const total = sumarItems(items);
+    const pagado = sumarPagos(pedido.pagos);
+    if (total.lessThan(pagado)) {
+      enviarError(
+        res,
+        409,
+        "TOTAL_MENOR_QUE_PAGADO",
+        `El total quedaría en ${total.toFixed(2)}, menos de lo ya pagado (${pagado.toFixed(2)}). Corrige primero el pago.`,
+      );
+      return;
+    }
+  }
+
+  if (fechaEntrega !== undefined || items) {
+    // Escritura anidada: Prisma la ejecuta en una transacción, así que borrar los
+    // ítems anteriores y crear los nuevos ocurre completo o no ocurre.
+    await prisma.pedido.update({
+      where: { id: id.data },
+      data: {
+        fechaEntrega:
+          fechaEntrega === undefined
+            ? undefined
+            : fechaEntrega === null
+              ? null
+              : new Date(`${fechaEntrega}T00:00:00.000Z`),
+        items: items ? { deleteMany: {}, create: items } : undefined,
+      },
+    });
+    // Socket.io (pendiente): emitir aquí "pedido:actualizado" con el pedido completo.
+  }
+
+  res.json(await obtenerPedido(id.data));
+});
+
+pedidosRouter.patch("/:id/estado", async (req, res) => {
+  const id = idSchema.safeParse(req.params.id);
+  if (!id.success) {
+    enviarError(res, 400, "VALIDATION_ERROR", "Id inválido");
+    return;
+  }
+  const datos = cambiarEstadoSchema.safeParse(req.body ?? {});
+  if (!datos.success) {
+    enviarError(res, 400, "VALIDATION_ERROR", datos.error.issues[0]?.message ?? "Datos inválidos");
+    return;
+  }
+
+  const actual = await prisma.pedido.findUnique({ where: { id: id.data }, select: { estado: true } });
+  if (!actual) {
+    enviarError(res, 404, "NO_ENCONTRADO", "El pedido no existe");
+    return;
+  }
+
+  const { estado } = datos.data;
+  // Si el estado es el mismo no se escribe nada: así fechaEntregado no cambia.
+  if (estado !== actual.estado) {
+    await prisma.pedido.update({
+      where: { id: id.data },
+      // fechaEntregado tiene valor si y solo si el pedido está ENTREGADO.
+      data: { estado, fechaEntregado: estado === "ENTREGADO" ? new Date() : null },
+    });
+    // Socket.io (pendiente): emitir aquí "pedido:estado" con
+    // { id, estado, estadoAnterior: actual.estado }. Va dentro del if para que
+    // no se emita cuando el estado no cambió.
+  }
+
+  res.json(await obtenerPedido(id.data));
 });

@@ -13,6 +13,7 @@ Si el código y este documento no coinciden, uno de los dos está mal: se corrig
 - Los montos de entrada (dinero y cantidades) aceptan máximo 2 decimales, sin separador de miles, y como máximo `99999999.99`. Si no cumplen, responden `400`.
 - Los ids (en la URL o en el body, como `clienteId`) son enteros positivos hasta `2147483647`. Fuera de ese rango responden `400`.
 - Las fechas viajan en formato ISO 8601 (`"2026-10-01T15:30:00.000Z"`). Las fechas sin hora, como `fechaEntrega`, como `"2026-10-05"`.
+- Los filtros por día (`desde`/`hasta`) usan **días de Colombia** (America/Bogota, UTC−5), aunque las fechas con hora se guarden en UTC. Por ejemplo, `hasta=2026-10-27` incluye todo lo ocurrido hasta las 11:59 p. m. del 27 en Colombia, que en UTC ya es el 28 a las 04:59.
 - Todas las rutas, excepto `/health`, `POST /api/auth/login` y `POST /api/auth/logout`, requieren sesión iniciada. Sin sesión responden `401`.
 
 ### Códigos de estado usados
@@ -178,11 +179,17 @@ Forma de un pedido (la misma en la lista, el historial, el detalle y las respues
 - `pagos`: los pagos vigentes del pedido, del más antiguo al más reciente. Los pagos borrados no aparecen ni cuentan en `pagado` ni en `saldo`.
 
 ### `GET /api/pedidos/historial?desde=AAAA-MM-DD&hasta=AAAA-MM-DD&buscar=texto`
-Pedidos en estado `ENTREGADO`, filtrados por `fechaEntregado`.
-- Sin `desde`/`hasta`: últimos 7 días.
-- `buscar`: filtra por nombre de cliente.
+Pedidos en estado `ENTREGADO`, filtrados por `fechaEntregado` en días de Colombia (ver convenciones generales). Ordenados del entregado más recientemente al más antiguo.
+- `desde` y `hasta` son opcionales e incluyen los dos extremos:
+  - Sin ninguno: los últimos 7 días, incluido hoy (hoy en Colombia).
+  - Solo `desde`: desde ese día hasta hoy.
+  - Solo `hasta`: los 7 días que terminan ese día.
+- `desde` no puede ser posterior a `hasta` (pueden ser iguales: un solo día).
+- El rango puede tener como máximo **366 días**, contando los dos extremos. No hay paginación: el límite evita respuestas con miles de pedidos.
+- `buscar`: filtra por nombre del cliente, sin distinguir mayúsculas (máximo 150 caracteres). Vacío o solo espacios: sin filtro.
 
-Misma forma de respuesta que `GET /api/pedidos`.
+**200** con la misma forma de respuesta que `GET /api/pedidos`.
+**400** si una fecha no es válida, si el rango está invertido o si supera 366 días.
 
 ### `GET /api/pedidos/:id`
 Detalle de un pedido, con la misma forma que cada elemento de `GET /api/pedidos`. **200** o **404**.
@@ -204,8 +211,26 @@ Debe tener al menos un ítem. **201** con el pedido creado (forma de `GET /api/p
 Emite el evento de socket `pedido:creado`.
 
 ### `PATCH /api/pedidos/:id`
-Edita datos del pedido (fecha de entrega, ítems). **No cambia el estado**: para eso existe el endpoint siguiente. **200**
-Emite `pedido:actualizado`.
+Edita la fecha de entrega y/o los ítems. **No cambia el estado**: para eso existe el endpoint siguiente.
+
+**Body** (todos los campos son opcionales; solo se envía lo que cambia)
+```json
+{
+  "fechaEntrega": "2026-10-08",
+  "items": [
+    { "descripcion": "Pendón 1x2m", "tipoMaquina": "PLOTTER_UV", "cantidad": "2", "precioUnitario": "85000" }
+  ]
+}
+```
+- `fechaEntrega`: una fecha `AAAA-MM-DD`, o `null` para quitarla. Si no se envía, no cambia.
+- `items`: si se envía, **reemplaza la lista completa** (mínimo un ítem), en una transacción: o se guardan todos los nuevos o quedan los anteriores. Los ítems reciben ids nuevos, así que el frontend no debe guardar ids de ítems entre ediciones. Si no se envía, los ítems no cambian.
+- Un body vacío `{}` responde **200** sin cambios.
+
+**200** con el pedido actualizado (forma de `GET /api/pedidos/:id`). Emite `pedido:actualizado` si hubo cambios.
+**400** si los datos no son válidos, incluido enviar `estado` (se cambia con `PATCH /api/pedidos/:id/estado`).
+**404** si el pedido no existe.
+**409** `PEDIDO_CERRADO` si el pedido está `ENTREGADO` o `CANCELADO`. Para corregirlo, primero se mueve a otra columna.
+**409** `TOTAL_MENOR_QUE_PAGADO` si con los ítems nuevos el total quedaría por debajo de lo ya pagado (solo cuentan los pagos vigentes). El saldo nunca queda negativo: si se cobró de más, primero se corrige el pago. Un total igual a lo pagado sí se permite (saldo `0.00`).
 
 ### `PATCH /api/pedidos/:id/estado`
 Mueve el pedido de columna. Es lo que llama el drag & drop del Kanban.
@@ -214,11 +239,17 @@ Mueve el pedido de columna. Es lo que llama el drag & drop del Kanban.
 ```json
 { "estado": "ENTREGA" }
 ```
-Reglas:
-- Al pasar a `ENTREGADO`, el backend guarda `fechaEntregado` con la fecha actual.
-- Si sale de `ENTREGADO` (corrección de un error), `fechaEntregado` vuelve a `null`.
+`estado` es uno de `DISENO`, `PRODUCCION`, `ENTREGA`, `ENTREGADO`, `CANCELADO` (en mayúsculas).
 
-**200** con el pedido actualizado. Emite `pedido:estado`.
+Reglas:
+- Se puede mover entre cualquier par de estados, también hacia atrás: arrastrar una tarjeta a la columna equivocada es un error normal y se corrige moviéndola de nuevo.
+- `fechaEntregado` tiene valor si y solo si el pedido está en `ENTREGADO`:
+  - Al pasar a `ENTREGADO`, el backend guarda `fechaEntregado` con la fecha y hora actual.
+  - Si sale de `ENTREGADO` (corrección de un error), `fechaEntregado` vuelve a `null`. Si después vuelve a `ENTREGADO`, recibe una fecha nueva.
+- Si el estado enviado es igual al actual, responde **200** sin modificar nada (en particular, `fechaEntregado` no cambia) y no emite evento.
+
+**200** con el pedido actualizado (forma de `GET /api/pedidos/:id`). Emite `pedido:estado` solo si el estado cambió.
+**400** si el id o el estado no son válidos. **404** si el pedido no existe.
 
 > Va separado de `PATCH /api/pedidos/:id` porque cambiar el estado tiene efectos propios (la fecha de entregado, el evento en tiempo real) y es la operación más frecuente del sistema.
 

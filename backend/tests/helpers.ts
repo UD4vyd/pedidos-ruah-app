@@ -62,6 +62,7 @@ export async function crearPedido(datos: {
   estado?: EstadoPedido;
   fechaEntrega?: string;
   fechaCreacion?: Date;
+  fechaEntregado?: Date;
   items?: ItemPrueba[];
 }) {
   const items = datos.items ?? [{}];
@@ -71,6 +72,7 @@ export async function crearPedido(datos: {
       usuarioId: datos.usuarioId,
       estado: datos.estado,
       fechaCreacion: datos.fechaCreacion,
+      fechaEntregado: datos.fechaEntregado,
       fechaEntrega: datos.fechaEntrega ? new Date(`${datos.fechaEntrega}T00:00:00.000Z`) : undefined,
       items: {
         create: items.map((item) => ({

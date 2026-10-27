@@ -10,13 +10,24 @@ export const incluirPedido = {
 
 type PedidoConRelaciones = Prisma.PedidoGetPayload<{ include: typeof incluirPedido }>;
 
-export function formatearPedido(pedido: PedidoConRelaciones) {
-  const cero = new Prisma.Decimal(0);
-  const total = pedido.items.reduce(
-    (suma, item) => suma.add(item.cantidad.mul(item.precioUnitario)),
-    cero,
+type ValorDecimal = string | Prisma.Decimal;
+
+// Total de un pedido: suma de cantidad × precioUnitario. Acepta ítems guardados
+// (Decimal) o recién validados (string), para calcular el total antes de guardar.
+export function sumarItems(items: { cantidad: ValorDecimal; precioUnitario: ValorDecimal }[]) {
+  return items.reduce(
+    (suma, item) => suma.add(new Prisma.Decimal(item.cantidad).mul(item.precioUnitario)),
+    new Prisma.Decimal(0),
   );
-  const pagado = pedido.pagos.reduce((suma, pago) => suma.add(pago.monto), cero);
+}
+
+export function sumarPagos(pagos: { monto: Prisma.Decimal }[]) {
+  return pagos.reduce((suma, pago) => suma.add(pago.monto), new Prisma.Decimal(0));
+}
+
+export function formatearPedido(pedido: PedidoConRelaciones) {
+  const total = sumarItems(pedido.items);
+  const pagado = sumarPagos(pedido.pagos);
 
   return {
     id: pedido.id,
