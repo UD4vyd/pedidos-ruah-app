@@ -156,10 +156,14 @@ Pedidos **activos** para el Kanban: todos los que no están en `ENTREGADO` ni `C
     "estado": "PRODUCCION",
     "fechaCreacion": "2026-10-01T15:30:00.000Z",
     "fechaEntrega": "2026-10-05",
+    "fechaEntregado": null,
     "cliente": { "id": 3, "nombre": "Panadería El Trigal", "telefonoWhatsapp": "3001234567" },
     "usuario": { "id": 1, "nombre": "Laura" },
     "items": [
       { "id": 30, "descripcion": "Pendón 1x2m", "tipoMaquina": "PLOTTER_UV", "cantidad": "1.00", "precioUnitario": "85000.00" }
+    ],
+    "pagos": [
+      { "id": 7, "monto": "40000.00", "metodo": "TRANSFERENCIA", "fecha": "2026-10-01T15:45:00.000Z" }
     ],
     "total": "85000.00",
     "pagado": "40000.00",
@@ -169,15 +173,19 @@ Pedidos **activos** para el Kanban: todos los que no están en `ENTREGADO` ni `C
 ```
 `total`, `pagado` y `saldo` **no están guardados** en la base: el backend los calcula sumando `items` y `pagos` en cada consulta.
 
+Forma de un pedido (la misma en la lista, el historial, el detalle y las respuestas de creación y edición):
+- `fechaEntregado`: fecha y hora en que pasó a `ENTREGADO` (ISO 8601), o `null` si no está entregado.
+- `pagos`: los pagos vigentes del pedido, del más antiguo al más reciente. Los pagos borrados no aparecen ni cuentan en `pagado` ni en `saldo`.
+
 ### `GET /api/pedidos/historial?desde=AAAA-MM-DD&hasta=AAAA-MM-DD&buscar=texto`
 Pedidos en estado `ENTREGADO`, filtrados por `fechaEntregado`.
 - Sin `desde`/`hasta`: últimos 7 días.
 - `buscar`: filtra por nombre de cliente.
 
-Misma forma de respuesta que `GET /api/pedidos`, más `fechaEntregado`.
+Misma forma de respuesta que `GET /api/pedidos`.
 
 ### `GET /api/pedidos/:id`
-Detalle completo de un pedido, incluida la lista de `pagos`. **200** o **404**.
+Detalle de un pedido, con la misma forma que cada elemento de `GET /api/pedidos`. **200** o **404**.
 
 ### `POST /api/pedidos`
 Crea un pedido con sus ítems en una sola operación (transacción: o se crea todo o nada). El `usuarioId` lo toma el backend de la sesión, no del body. El estado inicial siempre es `DISENO`.
