@@ -1,0 +1,5 @@
+# Variables de entorno en cualquier carpeta (pueden tener credenciales).
+# Las plantillas *.example sí se suben: documentan qué variables hacen falta.
+.env
+.env.*
+!*.example
