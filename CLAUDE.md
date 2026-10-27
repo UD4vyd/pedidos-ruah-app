@@ -32,6 +32,10 @@ Usa siempre los scripts de npm. **No uses `npx prisma ...`**: puede descargar ot
 | `npm run db:generate` | Regenerar el cliente de Prisma |
 | `npm run db:status` | Estado de las migraciones |
 | `npm run db:seed` | Crear los usuarios de desarrollo (idempotente) |
+| `npm test` | Correr todas las pruebas una vez (Vitest + Supertest) |
+| `npm run test:watch` | Correr las pruebas y repetirlas al guardar cambios |
+
+Las pruebas necesitan `backend/.env.test` (se copia desde `backend/.env.test.example`), con un `DATABASE_URL` que apunte a una base cuyo nombre termine en `_test`. Las pruebas vacían todas las tablas antes de cada caso; si el nombre no termina en `_test`, se cancelan sin tocar la base.
 
 ## Estructura de `backend/src/`
 
