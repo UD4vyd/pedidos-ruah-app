@@ -10,8 +10,10 @@ Si el código y este documento no coinciden, uno de los dos está mal: se corrig
 - Todas las rutas empiezan con `/api`, salvo `/health`.
 - Los cuerpos de petición y respuesta son JSON.
 - Los montos de dinero viajan como **string** (`"45000.00"`), no como número, para no perder precisión (vienen de columnas `Decimal`).
+- Los montos de entrada (dinero y cantidades) aceptan máximo 2 decimales, sin separador de miles, y como máximo `99999999.99`. Si no cumplen, responden `400`.
+- Los ids (en la URL o en el body, como `clienteId`) son enteros positivos hasta `2147483647`. Fuera de ese rango responden `400`.
 - Las fechas viajan en formato ISO 8601 (`"2026-10-01T15:30:00.000Z"`). Las fechas sin hora, como `fechaEntrega`, como `"2026-10-05"`.
-- Todas las rutas, excepto `/health` y `POST /api/auth/login`, requieren sesión iniciada. Sin sesión responden `401`.
+- Todas las rutas, excepto `/health`, `POST /api/auth/login` y `POST /api/auth/logout`, requieren sesión iniciada. Sin sesión responden `401`.
 
 ### Códigos de estado usados
 
@@ -22,7 +24,7 @@ Si el código y este documento no coinciden, uno de los dos está mal: se corrig
 | 204 | OK, sin contenido (por ejemplo, después de borrar) |
 | 400 | Datos inválidos (falta un campo, tipo incorrecto) |
 | 401 | No hay sesión iniciada o expiró |
-| 404 | El recurso no existe |
+| 404 | El recurso o la ruta no existe |
 | 409 | Conflicto con el estado actual (ej. borrar un cliente con pedidos) |
 | 500 | Error interno del servidor |
 
@@ -36,6 +38,12 @@ Si el código y este documento no coinciden, uno de los dos está mal: se corrig
   }
 }
 ```
+
+### Rutas que no existen
+
+Una ruta desconocida responde **404** con `code: "RUTA_NO_ENCONTRADA"`, en el mismo formato de error.
+Es distinto de `NO_ENCONTRADO`, que significa que la ruta existe pero el recurso pedido (un cliente, un pedido) no.
+Dentro de un recurso protegido (por ejemplo `/api/clientes/x/y`), sin sesión responde primero **401**.
 
 ---
 
@@ -78,6 +86,8 @@ Las sesiones se guardan en la base de datos (tabla `sesiones`), no en JWT, para 
 
 ### `POST /api/auth/logout`
 Borra la sesión actual de la base de datos y la cookie del navegador. **204**
+
+No requiere sesión: si no hay sesión (o ya expiró), igual responde **204**. Así cerrar sesión dos veces no es un error.
 
 ### `GET /api/auth/me`
 Devuelve el usuario de la sesión actual. El frontend lo usa al cargar para saber si ya hay sesión.
@@ -122,9 +132,11 @@ Lista clientes. `buscar` es opcional y filtra por nombre o teléfono. Se usa en 
 { "nombre": "Panadería El Trigal", "telefonoWhatsapp": "3001234567" }
 ```
 **201** — cliente creado
+**409** `CLIENTE_DUPLICADO` — ya existe un cliente con ese teléfono.
 
 ### `PATCH /api/clientes/:id`
 Actualiza nombre o teléfono. Solo se envían los campos que cambian. **200**
+**404** si el cliente no existe. **409** `CLIENTE_DUPLICADO` si el teléfono nuevo ya lo tiene **otro** cliente (reenviar el teléfono propio no es un error).
 
 ### `DELETE /api/clientes/:id`
 **204** si no tiene pedidos. **409** si tiene pedidos asociados: no se borra, para no perder historial financiero.
@@ -144,10 +156,14 @@ Pedidos **activos** para el Kanban: todos los que no están en `ENTREGADO` ni `C
     "estado": "PRODUCCION",
     "fechaCreacion": "2026-10-01T15:30:00.000Z",
     "fechaEntrega": "2026-10-05",
+    "fechaEntregado": null,
     "cliente": { "id": 3, "nombre": "Panadería El Trigal", "telefonoWhatsapp": "3001234567" },
     "usuario": { "id": 1, "nombre": "Laura" },
     "items": [
       { "id": 30, "descripcion": "Pendón 1x2m", "tipoMaquina": "PLOTTER_UV", "cantidad": "1.00", "precioUnitario": "85000.00" }
+    ],
+    "pagos": [
+      { "id": 7, "monto": "40000.00", "metodo": "TRANSFERENCIA", "fecha": "2026-10-01T15:45:00.000Z" }
     ],
     "total": "85000.00",
     "pagado": "40000.00",
@@ -157,15 +173,19 @@ Pedidos **activos** para el Kanban: todos los que no están en `ENTREGADO` ni `C
 ```
 `total`, `pagado` y `saldo` **no están guardados** en la base: el backend los calcula sumando `items` y `pagos` en cada consulta.
 
+Forma de un pedido (la misma en la lista, el historial, el detalle y las respuestas de creación y edición):
+- `fechaEntregado`: fecha y hora en que pasó a `ENTREGADO` (ISO 8601), o `null` si no está entregado.
+- `pagos`: los pagos vigentes del pedido, del más antiguo al más reciente. Los pagos borrados no aparecen ni cuentan en `pagado` ni en `saldo`.
+
 ### `GET /api/pedidos/historial?desde=AAAA-MM-DD&hasta=AAAA-MM-DD&buscar=texto`
 Pedidos en estado `ENTREGADO`, filtrados por `fechaEntregado`.
 - Sin `desde`/`hasta`: últimos 7 días.
 - `buscar`: filtra por nombre de cliente.
 
-Misma forma de respuesta que `GET /api/pedidos`, más `fechaEntregado`.
+Misma forma de respuesta que `GET /api/pedidos`.
 
 ### `GET /api/pedidos/:id`
-Detalle completo de un pedido, incluida la lista de `pagos`. **200** o **404**.
+Detalle de un pedido, con la misma forma que cada elemento de `GET /api/pedidos`. **200** o **404**.
 
 ### `POST /api/pedidos`
 Crea un pedido con sus ítems en una sola operación (transacción: o se crea todo o nada). El `usuarioId` lo toma el backend de la sesión, no del body. El estado inicial siempre es `DISENO`.

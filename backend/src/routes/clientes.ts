@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { enviarError } from "../lib/http.js";
 import { prisma } from "../lib/prisma.js";
+import { idSchema } from "../lib/validacion.js";
 
 export const clientesRouter = Router();
 
@@ -14,8 +15,6 @@ const clienteSchema = z.object({
     .transform((valor) => valor.replace(/\D/g, ""))
     .pipe(z.string().regex(/^3\d{9}$/, "El teléfono debe ser un celular de 10 dígitos")),
 });
-
-const idSchema = z.coerce.number().int().positive();
 
 clientesRouter.get("/", async (req, res) => {
   const buscar = typeof req.query.buscar === "string" ? req.query.buscar.trim() : "";
@@ -68,6 +67,16 @@ clientesRouter.patch("/:id", async (req, res) => {
   if (!existe) {
     enviarError(res, 404, "NO_ENCONTRADO", "El cliente no existe");
     return;
+  }
+
+  if (datos.data.telefonoWhatsapp) {
+    const duplicado = await prisma.cliente.findFirst({
+      where: { telefonoWhatsapp: datos.data.telefonoWhatsapp, NOT: { id: id.data } },
+    });
+    if (duplicado) {
+      enviarError(res, 409, "CLIENTE_DUPLICADO", "Ya existe un cliente con ese teléfono");
+      return;
+    }
   }
 
   const cliente = await prisma.cliente.update({
