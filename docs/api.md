@@ -11,7 +11,7 @@ Si el código y este documento no coinciden, uno de los dos está mal: se corrig
 - Los cuerpos de petición y respuesta son JSON.
 - Los montos de dinero viajan como **string** (`"45000.00"`), no como número, para no perder precisión (vienen de columnas `Decimal`).
 - Las fechas viajan en formato ISO 8601 (`"2026-10-01T15:30:00.000Z"`). Las fechas sin hora, como `fechaEntrega`, como `"2026-10-05"`.
-- Todas las rutas, excepto `/health` y `POST /api/auth/login`, requieren sesión iniciada. Sin sesión responden `401`.
+- Todas las rutas, excepto `/health`, `POST /api/auth/login` y `POST /api/auth/logout`, requieren sesión iniciada. Sin sesión responden `401`.
 
 ### Códigos de estado usados
 
@@ -78,6 +78,8 @@ Las sesiones se guardan en la base de datos (tabla `sesiones`), no en JWT, para 
 
 ### `POST /api/auth/logout`
 Borra la sesión actual de la base de datos y la cookie del navegador. **204**
+
+No requiere sesión: si no hay sesión (o ya expiró), igual responde **204**. Así cerrar sesión dos veces no es un error.
 
 ### `GET /api/auth/me`
 Devuelve el usuario de la sesión actual. El frontend lo usa al cargar para saber si ya hay sesión.
