@@ -13,6 +13,7 @@ Si el código y este documento no coinciden, uno de los dos está mal: se corrig
 - Los montos de entrada (dinero y cantidades) aceptan máximo 2 decimales, sin separador de miles, y como máximo `99999999.99`. Si no cumplen, responden `400`.
 - Los ids (en la URL o en el body, como `clienteId`) son enteros positivos hasta `2147483647`. Fuera de ese rango responden `400`.
 - Las fechas viajan en formato ISO 8601 (`"2026-10-01T15:30:00.000Z"`). Las fechas sin hora, como `fechaEntrega`, como `"2026-10-05"`.
+- Los filtros por día (`desde`/`hasta`) usan **días de Colombia** (America/Bogota, UTC−5), aunque las fechas con hora se guarden en UTC. Por ejemplo, `hasta=2026-10-27` incluye todo lo ocurrido hasta las 11:59 p. m. del 27 en Colombia, que en UTC ya es el 28 a las 04:59.
 - Todas las rutas, excepto `/health`, `POST /api/auth/login` y `POST /api/auth/logout`, requieren sesión iniciada. Sin sesión responden `401`.
 
 ### Códigos de estado usados
@@ -178,11 +179,17 @@ Forma de un pedido (la misma en la lista, el historial, el detalle y las respues
 - `pagos`: los pagos vigentes del pedido, del más antiguo al más reciente. Los pagos borrados no aparecen ni cuentan en `pagado` ni en `saldo`.
 
 ### `GET /api/pedidos/historial?desde=AAAA-MM-DD&hasta=AAAA-MM-DD&buscar=texto`
-Pedidos en estado `ENTREGADO`, filtrados por `fechaEntregado`.
-- Sin `desde`/`hasta`: últimos 7 días.
-- `buscar`: filtra por nombre de cliente.
+Pedidos en estado `ENTREGADO`, filtrados por `fechaEntregado` en días de Colombia (ver convenciones generales). Ordenados del entregado más recientemente al más antiguo.
+- `desde` y `hasta` son opcionales e incluyen los dos extremos:
+  - Sin ninguno: los últimos 7 días, incluido hoy (hoy en Colombia).
+  - Solo `desde`: desde ese día hasta hoy.
+  - Solo `hasta`: los 7 días que terminan ese día.
+- `desde` no puede ser posterior a `hasta` (pueden ser iguales: un solo día).
+- El rango puede tener como máximo **366 días**, contando los dos extremos. No hay paginación: el límite evita respuestas con miles de pedidos.
+- `buscar`: filtra por nombre del cliente, sin distinguir mayúsculas (máximo 150 caracteres). Vacío o solo espacios: sin filtro.
 
-Misma forma de respuesta que `GET /api/pedidos`.
+**200** con la misma forma de respuesta que `GET /api/pedidos`.
+**400** si una fecha no es válida, si el rango está invertido o si supera 366 días.
 
 ### `GET /api/pedidos/:id`
 Detalle de un pedido, con la misma forma que cada elemento de `GET /api/pedidos`. **200** o **404**.

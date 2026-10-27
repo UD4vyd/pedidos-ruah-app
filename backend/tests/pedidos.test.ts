@@ -1,5 +1,5 @@
 import type { Agent } from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "../src/lib/prisma.js";
 import {
   DESCRIPCION_QUE_FALLA,
@@ -251,6 +251,152 @@ describe("GET /api/pedidos/:id", () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe("VALIDATION_ERROR");
+  });
+});
+
+describe("GET /api/pedidos/historial", () => {
+  function entregado(fechaEntregado: string, clienteId = cliente.id) {
+    return crearPedido({
+      clienteId,
+      usuarioId: usuario.id,
+      estado: "ENTREGADO",
+      fechaEntregado: new Date(fechaEntregado),
+    });
+  }
+
+  async function idsDelHistorial(query: Record<string, string>) {
+    const res = await agent.get("/api/pedidos/historial").query(query);
+    expect(res.status).toBe(200);
+    return res.body.map((p: { id: number }) => p.id);
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("se resuelve antes que /:id y responde una lista", async () => {
+    const res = await agent.get("/api/pedidos/historial");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+
+  it("solo incluye pedidos ENTREGADO", async () => {
+    let entregadoId = 0;
+    for (const estado of ["DISENO", "PRODUCCION", "ENTREGA", "ENTREGADO", "CANCELADO"] as const) {
+      // Todos con fechaEntregado en el rango, para probar que el filtro es por estado.
+      const pedido = await crearPedido({
+        clienteId: cliente.id,
+        usuarioId: usuario.id,
+        estado,
+        fechaEntregado: new Date("2026-10-15T15:00:00Z"),
+      });
+      if (estado === "ENTREGADO") entregadoId = pedido.id;
+    }
+
+    expect(await idsDelHistorial({ desde: "2026-10-15", hasta: "2026-10-15" })).toEqual([entregadoId]);
+  });
+
+  it("responde con la forma de un pedido e incluye fechaEntregado", async () => {
+    const pedido = await entregado("2026-10-15T15:00:00.000Z");
+
+    const res = await agent.get("/api/pedidos/historial").query({ desde: "2026-10-15", hasta: "2026-10-15" });
+    const detalle = await agent.get(`/api/pedidos/${pedido.id}`);
+
+    expect(res.body).toEqual([detalle.body]);
+    expect(res.body[0]).toMatchObject({ estado: "ENTREGADO", fechaEntregado: "2026-10-15T15:00:00.000Z" });
+  });
+
+  it("ordena del entregado más reciente al más antiguo", async () => {
+    const primero = await entregado("2026-10-10T15:00:00Z");
+    const tercero = await entregado("2026-10-12T15:00:00Z");
+    const segundo = await entregado("2026-10-11T15:00:00Z");
+
+    expect(await idsDelHistorial({ desde: "2026-10-10", hasta: "2026-10-12" })).toEqual([
+      tercero.id,
+      segundo.id,
+      primero.id,
+    ]);
+  });
+
+  it("filtra por nombre del cliente sin distinguir mayúsculas", async () => {
+    const otro = await crearCliente({ nombre: "Ferretería Central" });
+    const delTrigal = await entregado("2026-10-15T15:00:00Z");
+    await entregado("2026-10-15T16:00:00Z", otro.id);
+
+    const query = { desde: "2026-10-15", hasta: "2026-10-15" };
+    expect(await idsDelHistorial({ ...query, buscar: "TRIGAL" })).toEqual([delTrigal.id]);
+    expect(await idsDelHistorial({ ...query, buscar: "   " })).toHaveLength(2);
+  });
+
+  describe("días de Colombia (UTC−5)", () => {
+    it("hasta incluye lo entregado a las 10 p. m. de ese día en Colombia, que en UTC ya es el día siguiente", async () => {
+      // 2026-10-27 22:00 en Colombia = 2026-10-28 03:00 UTC.
+      const pedido = await entregado("2026-10-28T03:00:00.000Z");
+
+      expect(await idsDelHistorial({ desde: "2026-10-27", hasta: "2026-10-27" })).toEqual([pedido.id]);
+      expect(await idsDelHistorial({ desde: "2026-10-28", hasta: "2026-10-28" })).toEqual([]);
+    });
+
+    it("desde empieza a la medianoche de Colombia (05:00 UTC)", async () => {
+      const inicio = await entregado("2026-10-27T05:00:00.000Z");
+      await entregado("2026-10-27T04:59:59.999Z"); // 26 de octubre, 11:59:59.999 p. m. en Colombia
+
+      expect(await idsDelHistorial({ desde: "2026-10-27", hasta: "2026-10-27" })).toEqual([inicio.id]);
+    });
+
+    it("sin desde ni hasta trae los últimos 7 días de Colombia, incluido hoy", async () => {
+      const finDelDia26 = await entregado("2026-10-27T04:59:59.999Z");
+      const inicioDelDia20 = await entregado("2026-10-20T05:00:00.000Z");
+      await entregado("2026-10-20T04:59:59.999Z"); // 19 de octubre en Colombia: fuera
+      await entregado("2026-10-27T05:00:00.000Z"); // 27 de octubre en Colombia: fuera
+
+      // 2026-10-27 03:00 UTC: en Colombia todavía es el 26 a las 10 p. m.
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-10-27T03:00:00.000Z"));
+
+      expect(await idsDelHistorial({})).toEqual([finDelDia26.id, inicioDelDia20.id]);
+    });
+
+    it("solo con desde llega hasta hoy", async () => {
+      const dia25 = await entregado("2026-10-25T15:00:00Z");
+      const dia26 = await entregado("2026-10-26T15:00:00Z");
+      await entregado("2026-10-24T15:00:00Z");
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-10-27T03:00:00.000Z"));
+
+      expect(await idsDelHistorial({ desde: "2026-10-25" })).toEqual([dia26.id, dia25.id]);
+    });
+
+    it("solo con hasta trae los 7 días que terminan ese día", async () => {
+      const dia10 = await entregado("2026-10-10T15:00:00Z");
+      const dia4 = await entregado("2026-10-04T05:00:00.000Z");
+      await entregado("2026-10-04T04:59:59.999Z"); // 3 de octubre en Colombia: fuera
+
+      expect(await idsDelHistorial({ hasta: "2026-10-10" })).toEqual([dia10.id, dia4.id]);
+    });
+  });
+
+  it("acepta un rango de 366 días contando los dos extremos", async () => {
+    const res = await agent.get("/api/pedidos/historial").query({ desde: "2025-10-28", hasta: "2026-10-28" });
+
+    expect(res.status).toBe(200);
+  });
+
+  it.each([
+    ["rango invertido", { desde: "2026-10-28", hasta: "2026-10-27" }, "desde no puede ser posterior a hasta"],
+    ["rango de 367 días", { desde: "2025-10-27", hasta: "2026-10-28" }, "El rango máximo es de 366 días"],
+    ["desde que no existe", { desde: "2026-02-30" }, "La fecha no existe"],
+    ["hasta que no existe", { hasta: "2026-02-30" }, "La fecha no existe"],
+    ["desde en otro formato", { desde: "27/10/2026" }, "Usa el formato AAAA-MM-DD"],
+    ["hasta en otro formato", { hasta: "27/10/2026" }, "Usa el formato AAAA-MM-DD"],
+    ["búsqueda demasiado larga", { buscar: "a".repeat(151) }, "La búsqueda es demasiado larga"],
+  ])("responde 400 con %s", async (_caso, query, mensaje) => {
+    const res = await agent.get("/api/pedidos/historial").query(query);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: { code: "VALIDATION_ERROR", message: mensaje } });
   });
 });
 
@@ -601,6 +747,5 @@ describe("PATCH /api/pedidos/:id/estado", () => {
 });
 
 describe("pendiente de implementar", () => {
-  it.todo("GET /api/pedidos/historial filtra ENTREGADO por fechaEntregado (por defecto, últimos 7 días)");
   it.todo("los cambios de pedidos emiten pedido:creado, pedido:actualizado y pedido:estado por socket");
 });

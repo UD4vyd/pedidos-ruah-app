@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { EstadoPedido } from "../generated/prisma/enums.js";
+import { diasIncluidos, hoyEnColombia, inicioDelDiaEnColombia, sumarDias } from "../lib/fechas.js";
 import { enviarError } from "../lib/http.js";
 import { prisma } from "../lib/prisma.js";
 import { fecha, idSchema, monto } from "../lib/validacion.js";
@@ -19,6 +20,16 @@ const itemSchema = z.object({
   tipoMaquina: z.enum(["PLOTTER_UV", "LAMINADORA", "LASER", "SUBLIMADORA", "ESTAMPADO"]),
   cantidad: monto.refine((valor) => Number(valor) > 0, "La cantidad debe ser mayor que 0"),
   precioUnitario: monto,
+});
+
+const DIAS_HISTORIAL_POR_DEFECTO = 7;
+// Sin paginación, un rango de varios años devolvería miles de pedidos con sus relaciones.
+const MAX_DIAS_HISTORIAL = 366;
+
+const historialSchema = z.object({
+  desde: fecha.optional(),
+  hasta: fecha.optional(),
+  buscar: z.string().trim().max(150, "La búsqueda es demasiado larga").optional(),
 });
 
 const cambiarEstadoSchema = z.object({
@@ -80,6 +91,45 @@ pedidosRouter.get("/", async (_req, res) => {
       { fechaEntrega: { sort: "asc", nulls: "last" } },
       { fechaCreacion: "asc" },
     ],
+  });
+
+  res.json(pedidos.map(formatearPedido));
+});
+
+// Debe declararse antes de "/:id": si no, "historial" se tomaría como un id.
+pedidosRouter.get("/historial", async (req, res) => {
+  const datos = historialSchema.safeParse(req.query);
+  if (!datos.success) {
+    enviarError(res, 400, "VALIDATION_ERROR", datos.error.issues[0]?.message ?? "Datos inválidos");
+    return;
+  }
+
+  const hasta = datos.data.hasta ?? hoyEnColombia();
+  const desde = datos.data.desde ?? sumarDias(hasta, -(DIAS_HISTORIAL_POR_DEFECTO - 1));
+  // Las fechas AAAA-MM-DD se pueden comparar como texto.
+  if (desde > hasta) {
+    enviarError(res, 400, "VALIDATION_ERROR", "desde no puede ser posterior a hasta");
+    return;
+  }
+  if (diasIncluidos(desde, hasta) > MAX_DIAS_HISTORIAL) {
+    enviarError(res, 400, "VALIDATION_ERROR", `El rango máximo es de ${MAX_DIAS_HISTORIAL} días`);
+    return;
+  }
+
+  const buscar = datos.data.buscar;
+  const pedidos = await prisma.pedido.findMany({
+    where: {
+      estado: "ENTREGADO",
+      // Intervalo semiabierto en días de Colombia: desde el inicio de `desde`
+      // hasta antes del inicio del día siguiente a `hasta`.
+      fechaEntregado: {
+        gte: inicioDelDiaEnColombia(desde),
+        lt: inicioDelDiaEnColombia(sumarDias(hasta, 1)),
+      },
+      cliente: buscar ? { nombre: { contains: buscar, mode: "insensitive" } } : undefined,
+    },
+    include: incluirPedido,
+    orderBy: [{ fechaEntregado: "desc" }, { id: "desc" }],
   });
 
   res.json(pedidos.map(formatearPedido));
