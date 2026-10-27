@@ -10,6 +10,8 @@ Si el código y este documento no coinciden, uno de los dos está mal: se corrig
 - Todas las rutas empiezan con `/api`, salvo `/health`.
 - Los cuerpos de petición y respuesta son JSON.
 - Los montos de dinero viajan como **string** (`"45000.00"`), no como número, para no perder precisión (vienen de columnas `Decimal`).
+- Los montos de entrada (dinero y cantidades) aceptan máximo 2 decimales, sin separador de miles, y como máximo `99999999.99`. Si no cumplen, responden `400`.
+- Los ids (en la URL o en el body, como `clienteId`) son enteros positivos hasta `2147483647`. Fuera de ese rango responden `400`.
 - Las fechas viajan en formato ISO 8601 (`"2026-10-01T15:30:00.000Z"`). Las fechas sin hora, como `fechaEntrega`, como `"2026-10-05"`.
 - Todas las rutas, excepto `/health`, `POST /api/auth/login` y `POST /api/auth/logout`, requieren sesión iniciada. Sin sesión responden `401`.
 

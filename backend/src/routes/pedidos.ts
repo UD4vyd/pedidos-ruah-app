@@ -2,16 +2,10 @@ import { Router } from "express";
 import { z } from "zod";
 import { enviarError } from "../lib/http.js";
 import { prisma } from "../lib/prisma.js";
+import { idSchema, monto } from "../lib/validacion.js";
 import { formatearPedido, incluirPedido, obtenerPedido } from "../services/pedidos.js";
 
 export const pedidosRouter = Router();
-
-const idSchema = z.coerce.number().int().positive();
-
-const monto = z
-  .coerce.string()
-  .trim()
-  .regex(/^\d+(\.\d{1,2})?$/, "Usa números con máximo 2 decimales y sin separador de miles");
 
 const fecha = z
   .string()
@@ -29,7 +23,7 @@ const itemSchema = z.object({
 });
 
 const crearPedidoSchema = z.object({
-  clienteId: z.coerce.number().int().positive(),
+  clienteId: idSchema,
   fechaEntrega: fecha.optional(),
   items: z.array(itemSchema).min(1, "El pedido debe tener al menos un ítem"),
 });

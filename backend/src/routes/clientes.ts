@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { enviarError } from "../lib/http.js";
 import { prisma } from "../lib/prisma.js";
+import { idSchema } from "../lib/validacion.js";
 
 export const clientesRouter = Router();
 
@@ -14,8 +15,6 @@ const clienteSchema = z.object({
     .transform((valor) => valor.replace(/\D/g, ""))
     .pipe(z.string().regex(/^3\d{9}$/, "El teléfono debe ser un celular de 10 dígitos")),
 });
-
-const idSchema = z.coerce.number().int().positive();
 
 clientesRouter.get("/", async (req, res) => {
   const buscar = typeof req.query.buscar === "string" ? req.query.buscar.trim() : "";
