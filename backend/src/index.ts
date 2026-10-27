@@ -6,6 +6,7 @@ import cookieParser from "cookie-parser";
 import { authRouter } from "./routes/auth.js";
 import { requireAuth } from "./middleware/requireAuth.js";
 import { clientesRouter } from "./routes/clientes.js";
+import { pedidosRouter } from "./routes/pedidos.js";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -15,6 +16,7 @@ app.use(express.json());
 app.use(cookieParser());
 app.use("/api/auth", authRouter);
 app.use("/api/clientes", requireAuth, clientesRouter);
+app.use("/api/pedidos", requireAuth, pedidosRouter);
 
 app.get("/health", async (_req, res) => {
   try {
