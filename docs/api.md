@@ -214,11 +214,17 @@ Mueve el pedido de columna. Es lo que llama el drag & drop del Kanban.
 ```json
 { "estado": "ENTREGA" }
 ```
-Reglas:
-- Al pasar a `ENTREGADO`, el backend guarda `fechaEntregado` con la fecha actual.
-- Si sale de `ENTREGADO` (corrección de un error), `fechaEntregado` vuelve a `null`.
+`estado` es uno de `DISENO`, `PRODUCCION`, `ENTREGA`, `ENTREGADO`, `CANCELADO` (en mayúsculas).
 
-**200** con el pedido actualizado. Emite `pedido:estado`.
+Reglas:
+- Se puede mover entre cualquier par de estados, también hacia atrás: arrastrar una tarjeta a la columna equivocada es un error normal y se corrige moviéndola de nuevo.
+- `fechaEntregado` tiene valor si y solo si el pedido está en `ENTREGADO`:
+  - Al pasar a `ENTREGADO`, el backend guarda `fechaEntregado` con la fecha y hora actual.
+  - Si sale de `ENTREGADO` (corrección de un error), `fechaEntregado` vuelve a `null`. Si después vuelve a `ENTREGADO`, recibe una fecha nueva.
+- Si el estado enviado es igual al actual, responde **200** sin modificar nada (en particular, `fechaEntregado` no cambia) y no emite evento.
+
+**200** con el pedido actualizado (forma de `GET /api/pedidos/:id`). Emite `pedido:estado` solo si el estado cambió.
+**400** si el id o el estado no son válidos. **404** si el pedido no existe.
 
 > Va separado de `PATCH /api/pedidos/:id` porque cambiar el estado tiene efectos propios (la fecha de entregado, el evento en tiempo real) y es la operación más frecuente del sistema.
 

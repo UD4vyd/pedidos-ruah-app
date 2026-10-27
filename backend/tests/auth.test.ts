@@ -186,6 +186,7 @@ describe("rutas protegidas", () => {
     ["get", "/api/pedidos"],
     ["post", "/api/pedidos"],
     ["get", "/api/pedidos/1"],
+    ["patch", "/api/pedidos/1/estado"],
   ] as const)("%s %s responde 401 sin sesión", async (metodo, ruta) => {
     const res = await request(app)[metodo](ruta);
 

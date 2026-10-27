@@ -254,10 +254,134 @@ describe("GET /api/pedidos/:id", () => {
   });
 });
 
+describe("PATCH /api/pedidos/:id/estado", () => {
+  const ESTADOS = ["DISENO", "PRODUCCION", "ENTREGA", "ENTREGADO", "CANCELADO"] as const;
+  const PARES = ESTADOS.flatMap((origen) =>
+    ESTADOS.filter((destino) => destino !== origen).map((destino) => [origen, destino] as const),
+  );
+  const ENTREGADO_ANTES = new Date("2026-10-20T15:00:00.000Z");
+
+  function crearEn(estado: (typeof ESTADOS)[number]) {
+    return crearPedido({
+      clienteId: cliente.id,
+      usuarioId: usuario.id,
+      estado,
+      fechaEntregado: estado === "ENTREGADO" ? ENTREGADO_ANTES : undefined,
+    });
+  }
+
+  it.each(PARES)("permite mover de %s a %s", async (origen, destino) => {
+    const pedido = await crearEn(origen);
+
+    const res = await agent.patch(`/api/pedidos/${pedido.id}/estado`).send({ estado: destino });
+
+    expect(res.status).toBe(200);
+    expect(res.body.estado).toBe(destino);
+    const guardado = await prisma.pedido.findUniqueOrThrow({ where: { id: pedido.id } });
+    expect(guardado.estado).toBe(destino);
+    // fechaEntregado tiene valor si y solo si el pedido queda ENTREGADO.
+    expect(guardado.fechaEntregado !== null).toBe(destino === "ENTREGADO");
+  });
+
+  it("al pasar a ENTREGADO guarda la fecha y hora actual", async () => {
+    const pedido = await crearEn("ENTREGA");
+
+    const antes = Date.now();
+    const res = await agent.patch(`/api/pedidos/${pedido.id}/estado`).send({ estado: "ENTREGADO" });
+    const despues = Date.now();
+
+    const fechaEntregado = new Date(res.body.fechaEntregado).getTime();
+    expect(fechaEntregado).toBeGreaterThanOrEqual(antes);
+    expect(fechaEntregado).toBeLessThanOrEqual(despues);
+  });
+
+  it.each(["ENTREGA", "CANCELADO"] as const)(
+    "al salir de ENTREGADO hacia %s, fechaEntregado vuelve a null",
+    async (destino) => {
+      const pedido = await crearEn("ENTREGADO");
+
+      const res = await agent.patch(`/api/pedidos/${pedido.id}/estado`).send({ estado: destino });
+
+      expect(res.body.fechaEntregado).toBeNull();
+    },
+  );
+
+  it("si el estado es el mismo responde 200 sin cambiar fechaEntregado", async () => {
+    const pedido = await crearEn("ENTREGADO");
+
+    const res = await agent.patch(`/api/pedidos/${pedido.id}/estado`).send({ estado: "ENTREGADO" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.fechaEntregado).toBe(ENTREGADO_ANTES.toISOString());
+    const guardado = await prisma.pedido.findUniqueOrThrow({ where: { id: pedido.id } });
+    expect(guardado.fechaEntregado).toEqual(ENTREGADO_ANTES);
+  });
+
+  it("si el estado es el mismo en otra columna también responde 200", async () => {
+    const pedido = await crearEn("DISENO");
+
+    const res = await agent.patch(`/api/pedidos/${pedido.id}/estado`).send({ estado: "DISENO" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.estado).toBe("DISENO");
+  });
+
+  it("responde el pedido completo y no toca ítems ni pagos", async () => {
+    const pedido = await crearPedido({
+      clienteId: cliente.id,
+      usuarioId: usuario.id,
+      items: [{ cantidad: "1", precioUnitario: "85000" }],
+    });
+    await prisma.pago.create({ data: { pedidoId: pedido.id, monto: "40000", metodo: "EFECTIVO" } });
+    const antes = await agent.get(`/api/pedidos/${pedido.id}`);
+
+    const res = await agent.patch(`/api/pedidos/${pedido.id}/estado`).send({ estado: "PRODUCCION" });
+
+    expect(res.body).toEqual({ ...antes.body, estado: "PRODUCCION" });
+  });
+
+  it.each([
+    ["un estado que no existe", { estado: "TERMINADO" }],
+    ["el estado en minúscula", { estado: "entregado" }],
+    ["sin estado", {}],
+    ["un número", { estado: 1 }],
+  ])("responde 400 con %s", async (_caso, body) => {
+    const pedido = await crearEn("DISENO");
+
+    const res = await agent.patch(`/api/pedidos/${pedido.id}/estado`).send(body);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: { code: "VALIDATION_ERROR", message: "El estado no es válido" } });
+    const guardado = await prisma.pedido.findUniqueOrThrow({ where: { id: pedido.id } });
+    expect(guardado.estado).toBe("DISENO");
+  });
+
+  it("responde 400 sin cuerpo", async () => {
+    const pedido = await crearEn("DISENO");
+
+    const res = await agent.patch(`/api/pedidos/${pedido.id}/estado`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.message).toBe("El estado no es válido");
+  });
+
+  it.each(["abc", "0", "2147483648"])("responde 400 con id %s", async (id) => {
+    const res = await agent.patch(`/api/pedidos/${id}/estado`).send({ estado: "ENTREGA" });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: { code: "VALIDATION_ERROR", message: "Id inválido" } });
+  });
+
+  it.each(["999", "2147483647"])("responde 404 si el pedido %s no existe", async (id) => {
+    const res = await agent.patch(`/api/pedidos/${id}/estado`).send({ estado: "ENTREGA" });
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: { code: "NO_ENCONTRADO", message: "El pedido no existe" } });
+  });
+});
+
 describe("pendiente de implementar", () => {
   it.todo("GET /api/pedidos/historial filtra ENTREGADO por fechaEntregado (por defecto, últimos 7 días)");
   it.todo("PATCH /api/pedidos/:id edita fecha de entrega e ítems sin cambiar el estado");
-  it.todo("PATCH /api/pedidos/:id/estado guarda fechaEntregado al pasar a ENTREGADO");
-  it.todo("PATCH /api/pedidos/:id/estado vuelve fechaEntregado a null al salir de ENTREGADO");
   it.todo("los cambios de pedidos emiten pedido:creado, pedido:actualizado y pedido:estado por socket");
 });

@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
+import { EstadoPedido } from "../generated/prisma/enums.js";
 import { enviarError } from "../lib/http.js";
 import { prisma } from "../lib/prisma.js";
 import { fecha, idSchema, monto } from "../lib/validacion.js";
@@ -12,6 +13,10 @@ const itemSchema = z.object({
   tipoMaquina: z.enum(["PLOTTER_UV", "LAMINADORA", "LASER", "SUBLIMADORA", "ESTAMPADO"]),
   cantidad: monto.refine((valor) => Number(valor) > 0, "La cantidad debe ser mayor que 0"),
   precioUnitario: monto,
+});
+
+const cambiarEstadoSchema = z.object({
+  estado: z.enum(EstadoPedido, "El estado no es válido"),
 });
 
 const crearPedidoSchema = z.object({
@@ -78,4 +83,38 @@ pedidosRouter.get("/:id", async (req, res) => {
   }
 
   res.json(pedido);
+});
+
+pedidosRouter.patch("/:id/estado", async (req, res) => {
+  const id = idSchema.safeParse(req.params.id);
+  if (!id.success) {
+    enviarError(res, 400, "VALIDATION_ERROR", "Id inválido");
+    return;
+  }
+  const datos = cambiarEstadoSchema.safeParse(req.body ?? {});
+  if (!datos.success) {
+    enviarError(res, 400, "VALIDATION_ERROR", datos.error.issues[0]?.message ?? "Datos inválidos");
+    return;
+  }
+
+  const actual = await prisma.pedido.findUnique({ where: { id: id.data }, select: { estado: true } });
+  if (!actual) {
+    enviarError(res, 404, "NO_ENCONTRADO", "El pedido no existe");
+    return;
+  }
+
+  const { estado } = datos.data;
+  // Si el estado es el mismo no se escribe nada: así fechaEntregado no cambia.
+  if (estado !== actual.estado) {
+    await prisma.pedido.update({
+      where: { id: id.data },
+      // fechaEntregado tiene valor si y solo si el pedido está ENTREGADO.
+      data: { estado, fechaEntregado: estado === "ENTREGADO" ? new Date() : null },
+    });
+    // Socket.io (pendiente): emitir aquí "pedido:estado" con
+    // { id, estado, estadoAnterior: actual.estado }. Va dentro del if para que
+    // no se emita cuando el estado no cambió.
+  }
+
+  res.json(await obtenerPedido(id.data));
 });
